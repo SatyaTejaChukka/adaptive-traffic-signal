@@ -19,12 +19,12 @@ The goal is to improve intersection throughput compared with a fixed or rule-bas
 
 ## Current Architecture
 
-The project is organized around these files inside `Code/RL/traffic_rl`:
+The project is organized around these core files:
 
 - `simulation.py`
   Runs the traffic simulation, vehicle generation, UI, and signal control loop.
 - `config.py`
-  Stores training, evaluation, timing, and reward settings.
+  Stores training, evaluation, timing, profile (balanced / freight_priority), and reward settings.
 - `rl_agent.py`
   Implements the tabular Q-learning agent.
 - `rl_state.py`
@@ -34,13 +34,7 @@ The project is organized around these files inside `Code/RL/traffic_rl`:
 
 ## Running the Simulation
 
-Move into the simulator folder:
-
-```powershell
-cd "Code\RL\traffic_rl"
-```
-
-Install the runtime dependency:
+Install the runtime dependencies:
 
 ```powershell
 pip install -r requirements.txt
@@ -65,7 +59,7 @@ The final submission/demo configuration uses:
 
 The learned Q-table is loaded from:
 
-- `Code/RL/traffic_rl/models/traffic_qtable.pkl`
+- `models/traffic_qtable.pkl`
 
 ## Reported Comparison
 

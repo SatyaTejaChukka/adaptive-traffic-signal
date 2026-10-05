@@ -1,0 +1,98 @@
+import os
+USE_RL = True
+RL_TRAINING_MODE = False
+RL_EVAL_MODE = True
+LOAD_MODEL_ON_START = True
+SAVE_MODEL_ON_EXIT = False
+
+ALPHA = 0.1
+GAMMA = 0.95
+EPSILON_START = 0.0
+EPSILON_MIN = 0.05
+EPSILON_DECAY = 0.995
+
+YELLOW_DURATION = 3
+DEFAULT_GREEN_DURATION = 10
+MIN_GREEN_DURATION = 5
+MAX_GREEN_DURATION = 15
+GREEN_DURATION_OPTIONS = (5, 10, 15)
+
+TRAFFIC_PROFILE = "freight_priority"  # Options: "balanced", "freight_priority"
+
+TRAFFIC_PROFILES = {
+	"balanced": {
+		"INTENDED_RESULT": "Balanced fairness and throughput across all vehicle types.",
+		"PRIORITY_VEHICLE_TYPES": ["bike", "rickshaw", "car", "bus", "truck"],
+		"CONGESTION_THRESHOLD": 20,
+		"CONGESTION_PENALTY_WEIGHT": 0.5,
+		"STARVATION_WAIT_THRESHOLD": 120,
+		"STARVATION_MIN_QUEUE": 1,
+		"VEHICLE_PRIORITY_WEIGHTS": {
+			"bike": 0.9,
+			"rickshaw": 1.1,
+			"car": 1.0,
+			"bus": 1.3,
+			"truck": 1.4,
+		},
+		"VEHICLE_SIZE_WEIGHTS": {
+			"bike": 0.55,
+			"rickshaw": 0.9,
+			"car": 1.0,
+			"bus": 1.75,
+			"truck": 1.95,
+		},
+	},
+	"freight_priority": {
+		"INTENDED_RESULT": "Prioritize bus and truck movement during peak demand.",
+		"PRIORITY_VEHICLE_TYPES": ["bus", "truck"],
+		"CONGESTION_THRESHOLD": 16,
+		"CONGESTION_PENALTY_WEIGHT": 0.8,
+		"STARVATION_WAIT_THRESHOLD": 80,
+		"STARVATION_MIN_QUEUE": 1,
+		"VEHICLE_PRIORITY_WEIGHTS": {
+			"bike": 0.7,
+			"rickshaw": 1.15,
+			"car": 1.0,
+			"bus": 1.55,
+			"truck": 1.75,
+		},
+		"VEHICLE_SIZE_WEIGHTS": {
+			"bike": 0.45,
+			"rickshaw": 0.9,
+			"car": 1.0,
+			"bus": 1.8,
+			"truck": 2.0,
+		},
+	},
+}
+
+if TRAFFIC_PROFILE not in TRAFFIC_PROFILES:
+	raise ValueError(
+		"Invalid TRAFFIC_PROFILE '{}'. Valid options are: {}".format(
+			TRAFFIC_PROFILE,
+			", ".join(sorted(TRAFFIC_PROFILES.keys())),
+		)
+	)
+
+_ACTIVE_PROFILE = TRAFFIC_PROFILES[TRAFFIC_PROFILE]
+
+CONGESTION_THRESHOLD = _ACTIVE_PROFILE["CONGESTION_THRESHOLD"]
+CONGESTION_PENALTY_WEIGHT = _ACTIVE_PROFILE["CONGESTION_PENALTY_WEIGHT"]
+SWITCH_PENALTY = 1.0
+QUEUE_CLEAR_BONUS = 1.0
+ILLEGAL_STATE_PENALTY = 50.0
+STARVATION_WAIT_THRESHOLD = _ACTIVE_PROFILE["STARVATION_WAIT_THRESHOLD"]
+STARVATION_MIN_QUEUE = _ACTIVE_PROFILE["STARVATION_MIN_QUEUE"]
+
+STATE_BUCKET_SIZE = 5
+WAIT_BUCKET_SIZE = 10
+MAX_QUEUE_BUCKET = 6
+MAX_WAIT_BUCKET = 6
+
+MODEL_DIR = "models"
+MODEL_PATH = os.path.join(MODEL_DIR, "traffic_qtable.pkl")
+
+TRAFFIC_PROFILE_INTENDED_RESULT = _ACTIVE_PROFILE["INTENDED_RESULT"]
+PRIORITY_VEHICLE_TYPES = tuple(_ACTIVE_PROFILE["PRIORITY_VEHICLE_TYPES"])
+VEHICLE_PRIORITY_WEIGHTS = _ACTIVE_PROFILE["VEHICLE_PRIORITY_WEIGHTS"]
+VEHICLE_SIZE_WEIGHTS = _ACTIVE_PROFILE["VEHICLE_SIZE_WEIGHTS"]

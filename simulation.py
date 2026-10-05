@@ -24,7 +24,11 @@ from config import (
     SAVE_MODEL_ON_EXIT,
     STARVATION_MIN_QUEUE,
     STARVATION_WAIT_THRESHOLD,
+    PRIORITY_VEHICLE_TYPES,
+    TRAFFIC_PROFILE,
     USE_RL,
+    VEHICLE_PRIORITY_WEIGHTS,
+    VEHICLE_SIZE_WEIGHTS,
     YELLOW_DURATION,
 )
 from reward import compute_reward
@@ -79,6 +83,14 @@ vehicles = {'right': {0:[], 1:[], 2:[], 'crossed':0}, 'down': {0:[], 1:[], 2:[],
 vehicleTypes = {0:'car', 1:'bus', 2:'truck', 3:'rickshaw', 4:'bike'}
 directionNumbers = {0:'right', 1:'down', 2:'left', 3:'up'}
 groupToPhases = {0: (0, 2), 1: (1, 3)}
+
+VEHICLE_CROSSING_TIME = {
+    'car': carTime,
+    'bike': bikeTime,
+    'rickshaw': rickshawTime,
+    'bus': busTime,
+    'truck': truckTime,
+}
 
 ACTION_SPACE = list(range(len(GREEN_DURATION_OPTIONS) * len(groupToPhases)))
 rlAgent = QLearningAgent(
@@ -311,6 +323,25 @@ def get_direction_queue_counts():
     return queue_counts
 
 
+def get_vehicle_weight(vehicle_class):
+    priority_weight = VEHICLE_PRIORITY_WEIGHTS.get(vehicle_class, 1.0)
+    size_weight = VEHICLE_SIZE_WEIGHTS.get(vehicle_class, 1.0)
+    crossing_time_weight = VEHICLE_CROSSING_TIME.get(vehicle_class, carTime) / max(carTime, 0.1)
+    return priority_weight * size_weight * crossing_time_weight
+
+
+def get_direction_weighted_demands():
+    weighted_demands = {}
+    for direction in directionNumbers.values():
+        weighted_queue = 0.0
+        for lane_number in range(0, 3):
+            for vehicle in vehicles[direction][lane_number]:
+                if vehicle.crossed == 0:
+                    weighted_queue += get_vehicle_weight(vehicle.vehicleClass)
+        weighted_demands[direction] = weighted_queue
+    return weighted_demands
+
+
 def get_signal_waiting_times():
     return dict(waitingTimeByDirection)
 
@@ -366,39 +397,31 @@ def choose_most_starved_phase(queue_counts, waiting_times):
 
 
 def compute_fixed_green_time_for_phase(phase_index):
-    global noOfCars, noOfBikes, noOfBuses, noOfTrucks, noOfRickshaws, noOfLanes
-    global carTime, busTime, truckTime, rickshawTime, bikeTime
-
     direction = directionNumbers[phase_index]
-    noOfCars, noOfBuses, noOfTrucks, noOfRickshaws, noOfBikes = 0, 0, 0, 0, 0
-
-    for vehicle in vehicles[direction][0]:
-        if vehicle.crossed == 0:
-            noOfBikes += 1
-
-    for lane_number in range(1, 3):
+    weighted_service_load = 0.0
+    for lane_number in range(0, 3):
         for vehicle in vehicles[direction][lane_number]:
             if vehicle.crossed == 0:
-                vclass = vehicle.vehicleClass
-                if vclass == 'car':
-                    noOfCars += 1
-                elif vclass == 'bus':
-                    noOfBuses += 1
-                elif vclass == 'truck':
-                    noOfTrucks += 1
-                elif vclass == 'rickshaw':
-                    noOfRickshaws += 1
+                vehicle_class = vehicle.vehicleClass
+                base_cross_time = VEHICLE_CROSSING_TIME.get(vehicle_class, carTime)
+                weighted_service_load += base_cross_time * get_vehicle_weight(vehicle_class)
 
-    green_time = math.ceil(
-        (
-            (noOfCars * carTime)
-            + (noOfRickshaws * rickshawTime)
-            + (noOfBuses * busTime)
-            + (noOfTrucks * truckTime)
-            + (noOfBikes * bikeTime)
-        ) / (noOfLanes + 1)
-    )
+    green_time = math.ceil(weighted_service_load / (noOfLanes + 1))
     return clamp_green_time(green_time)
+
+
+def get_priority_vehicle_metrics():
+    priority_types = set(PRIORITY_VEHICLE_TYPES)
+    total_priority = 0
+    passed_priority = 0
+    for direction in directionNumbers.values():
+        for lane_number in range(0, 3):
+            for vehicle in vehicles[direction][lane_number]:
+                if vehicle.vehicleClass in priority_types:
+                    total_priority += 1
+                    if vehicle.crossed == 1:
+                        passed_priority += 1
+    return passed_priority, total_priority
 
 
 def reset_stops_for_phase(phase_index):
@@ -422,8 +445,8 @@ def sync_signal_red_times():
 def update_waiting_times():
     active_direction = directionNumbers[currentGreen]
     if currentYellow == 0:
-        waitingTimeByDirection[active_direction] = 0
-    for direction, queued in get_direction_queue_counts().items():
+        waitingTimeByDirection[active_direction] = 0.0
+    for direction, queued in get_direction_weighted_demands().items():
         if currentYellow == 0 and direction == active_direction:
             continue
         waitingTimeByDirection[direction] += queued
@@ -435,7 +458,7 @@ def train_rl_step(previous_phase, phase_changed):
     if not USE_RL or not RL_TRAINING_MODE or lastState is None or lastQueueSnapshot is None:
         return
 
-    current_queue_snapshot = get_direction_queue_counts()
+    current_queue_snapshot = get_direction_weighted_demands()
     next_state = build_state(current_queue_snapshot, currentGreen, currentYellow, get_signal_waiting_times())
     reward = compute_reward(
         current_queue_snapshot,
@@ -454,6 +477,7 @@ def get_control_decision():
     global lastDecisionDetails, lastAppliedAction, lastState, lastQueueSnapshot, lastPlannedGreenTime
 
     queue_counts = get_direction_queue_counts()
+    weighted_demands = get_direction_weighted_demands()
     waiting_times = get_signal_waiting_times()
     total_queue = sum(queue_counts.values())
 
@@ -465,7 +489,7 @@ def get_control_decision():
         )
         return currentGreen, lastPlannedGreenTime
 
-    forced_phase = choose_most_starved_phase(queue_counts, waiting_times)
+    forced_phase = choose_most_starved_phase(weighted_demands, waiting_times)
     if forced_phase is not None:
         forced_green_time = compute_fixed_green_time_for_phase(forced_phase)
         lastPlannedGreenTime = forced_green_time
@@ -476,14 +500,14 @@ def get_control_decision():
         return forced_phase, forced_green_time
 
     if USE_RL:
-        state = build_state(queue_counts, currentGreen, currentYellow, waiting_times)
+        state = build_state(weighted_demands, currentGreen, currentYellow, waiting_times)
         training_enabled = RL_TRAINING_MODE and not RL_EVAL_MODE
         if state not in rlAgent.q_table:
-            target_phase = choose_busiest_phase(queue_counts)
-            grouped_queue = queue_counts[directionNumbers[target_phase]]
-            if grouped_queue >= 10:
+            target_phase = choose_busiest_phase(weighted_demands)
+            grouped_queue = weighted_demands[directionNumbers[target_phase]]
+            if grouped_queue >= 12:
                 green_time = GREEN_DURATION_OPTIONS[-1]
-            elif grouped_queue >= 5:
+            elif grouped_queue >= 6:
                 green_time = GREEN_DURATION_OPTIONS[min(1, len(GREEN_DURATION_OPTIONS) - 1)]
             else:
                 green_time = GREEN_DURATION_OPTIONS[0]
@@ -493,11 +517,11 @@ def get_control_decision():
         else:
             action = rlAgent.act(state, training=training_enabled)
             phase_group, green_time = decode_action(action)
-            target_phase = get_phase_for_group(phase_group, queue_counts)
+            target_phase = get_phase_for_group(phase_group, weighted_demands)
         green_time = clamp_green_time(green_time)
         lastAppliedAction = action
         lastState = state
-        lastQueueSnapshot = queue_counts
+        lastQueueSnapshot = weighted_demands
         lastPlannedGreenTime = green_time
         lastDecisionDetails = "RL group {} phase {} green {}s eps {:.2f}".format(
             phase_group,
@@ -507,7 +531,7 @@ def get_control_decision():
         )
         return target_phase, green_time
 
-    target_phase = choose_busiest_phase(queue_counts)
+    target_phase = choose_busiest_phase(weighted_demands)
     green_time = compute_fixed_green_time_for_phase(target_phase)
     lastPlannedGreenTime = green_time
     lastDecisionDetails = "Fixed timer phase {} green {}s".format(directionNumbers[target_phase], green_time)
@@ -639,11 +663,14 @@ def simulationTime():
         time.sleep(1)
         if(timeElapsed==simTime):
             totalVehicles = 0
+            passed_priority, total_priority = get_priority_vehicle_metrics()
             print('Lane-wise Vehicle Counts')
             for i in range(noOfSignals):
                 print('Lane',i+1,':',vehicles[directionNumbers[i]]['crossed'])
                 totalVehicles += vehicles[directionNumbers[i]]['crossed']
             print('Total vehicles passed: ',totalVehicles)
+            print('Priority vehicle types:', ','.join(PRIORITY_VEHICLE_TYPES))
+            print('Priority vehicles passed: {}/{}'.format(passed_priority, total_priority))
             print('Total time passed: ',timeElapsed)
             print('No. of vehicles passed per unit time: ',(float(totalVehicles)/float(timeElapsed)))
             save_rl_policy()
@@ -730,12 +757,34 @@ class Main:
             screen.blit(vehicleCountTexts[i],vehicleCountCoods[i])
 
         timeElapsedText = font.render(("Time Elapsed: "+str(timeElapsed)), True, black, white)
-        screen.blit(timeElapsedText,(1100,50))
+        screen.blit(timeElapsedText,(20,20))
         modeText = "Mode: RL" if USE_RL else "Mode: Fixed"
         controllerText = font.render(modeText, True, black, white)
-        screen.blit(controllerText,(1100,80))
+        screen.blit(controllerText,(20,50))
+        passed_priority, total_priority = get_priority_vehicle_metrics()
+        priority_ratio = (100.0 * passed_priority / total_priority) if total_priority > 0 else 0.0
+        profileText = font.render("Profile: {}".format(TRAFFIC_PROFILE), True, black, white)
+        screen.blit(profileText,(20,80))
+        priorityTypesText = font.render(
+            "Priority types: {}".format('/'.join(PRIORITY_VEHICLE_TYPES)),
+            True,
+            black,
+            white,
+        )
+        screen.blit(priorityTypesText,(20,110))
+        priorityResultText = font.render(
+            "Intended result: {}/{} ({:.1f}%) passed".format(
+                passed_priority,
+                total_priority,
+                priority_ratio,
+            ),
+            True,
+            black,
+            white,
+        )
+        screen.blit(priorityResultText,(20,140))
         decisionText = font.render(lastDecisionDetails[:42], True, black, white)
-        screen.blit(decisionText,(920,110))
+        screen.blit(decisionText,(20,170))
         queueSummaryText = font.render(
             "NS:{}  EW:{}".format(
                 queueCounts['up'] + queueCounts['down'],
@@ -745,7 +794,7 @@ class Main:
             black,
             white,
         )
-        screen.blit(queueSummaryText,(980,140))
+        screen.blit(queueSummaryText,(20,200))
 
         # display the vehicles
         for vehicle in simulation:  
