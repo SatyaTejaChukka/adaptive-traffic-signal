@@ -34,6 +34,10 @@ tfnet/yolo/*.parsed
 darkflow/cython_utils/*.pyd
 darkflow/cython_utils/*.c
 
+# Scratch and local development
+*_backup.py
+.vscode/
+
 #egg-info
 darkflow.egg-info/
 
